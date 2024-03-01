@@ -5,15 +5,21 @@ import polars as pl
 import re
 import datetime
 from datetime import datetime as dt
-
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from misc.CustomLogging import Logger, log_fuction
+
+# # Set logging infomation
+# current_date = datetime.now(pytz.timezone('Asia/Singapore')).strftime('%Y%m%d')
+# logfilename = f"logfiles/Transactions/{current_date}.log"
+# loggerobj  = Logger('Transactions',stream='',file=[logfilename])
 
 class transaction_service():
 
     def __init__(self):
         self.__conn_str = os.environ["COCKROACH_DB"]
         self.__conn = create_engine(self.__conn_str).connect()
+
 
     def test_connection_db(self):
         if self.__conn.execute(text("SELECT now()")).fetchall():
@@ -45,79 +51,24 @@ class transaction_service():
 
         transactions = pl.DataFrame(port.worksheet('Stocks/ETFs Transactions').get_all_records())
 
-        transactions = transactions.drop(['Cost of Transaction',
-                        'Cost of Transaction (per unit)', 'Cumulative Cost',
-                        'Gains/Losses from Sale', 'Yield on Transaction', 'Cash Flow',
-                        'Remarks'])
+        transactions = transactions.select('date','type','security_name','ticker','currency','quantity','price','fees')
 
-        transactions = transactions.with_columns(pl.col('Date').str.to_datetime("%m/%d/%Y %H:%M:%S"))
+        transactions = transactions.with_columns(pl.col('date').str.to_datetime("%m/%d/%Y %H:%M:%S"))
 
         transactions = transactions.cast({
-            'Date':pl.Datetime,
-            'Type':pl.String,
-            'Stock':pl.String, 
-            'Transacted Units':pl.Float64, 
-            'Transacted Price (per unit)':pl.Float64, 
-            "Total in ticker's currency":pl.Float64, 
-            'Fees':pl.Float64, 
-            'Stock Split Ratio':pl.Float64, 
-            'Prev Row':pl.Int64,
-            'Previous Units': pl.Float64,
-            'Cumulative Units': pl.Float64,
-            'Transacted Value': pl.Float64,
-            'Previous Cost': pl.Float64,
-            'Ticker': pl.String
+            'date':pl.Datetime,
+            'type':pl.String,
+            'security_name':pl.String, 
+            'ticker': pl.String,
+            'currency': pl.String,
+            'quantity':pl.Float64, 
+            'price':pl.Float64, 
+            'fees':pl.Float64, 
             })
-        
-        def transaction_cost(row: pl.struct) -> pl.Float64:
-            if row['Type'] == 'Sell':
-                if row['Previous Units'] == 0.0:
-                    return 0.0
-                else:
-                    return (row['Transacted Units']/ row['Previous Units']) * row['Previous Cost']
-            else:
-                return 0.0
-
-        transactions = transactions.with_columns(pl.struct(['Type','Transacted Units','Previous Units','Previous Cost']).map_elements(transaction_cost).alias('Cost of Transaction'))
-        
-        def cummulative_cost(row: pl.struct) -> pl.Float64:
-            if row['Type'] == 'Buy':
-                return row['Previous Cost'] + row['Transacted Value']
-            elif row['Type'] == 'Div':
-                return row['Previous Cost']
-            elif row['Type'] == 'Sell':
-                if row['Previous Cost'] <= 0.0:
-                    return 0.0
-                else:
-                    return row['Previous Cost'] - row['Cost of Transaction']
-            else:
-                return 0.0
-
-        transactions = transactions.with_columns(pl.struct(['Type','Previous Cost','Transacted Value','Cost of Transaction']).map_elements(cummulative_cost).alias('Cummulative Cost'))
-
-        def gainloss_sale(row: pl.struct) -> pl.Float64:
-            if row['Type'] == 'Sell':
-                return row['Transacted Value'] - row['Cost of Transaction']
-            else:
-                if row['Type'] == 'Div':
-                    return row['Transacted Value']
-                else:
-                    return 0.0
-
-        transactions = transactions.with_columns(pl.struct(['Type','Transacted Value','Cost of Transaction']).map_elements(gainloss_sale).alias('Gains/Losses from Sale'))
-
-        def cash_flow(row: pl.struct) -> pl.Float64:
-            if row['Type'] == 'Buy':
-                return -1 * row['Transacted Value']
-            else:
-                return row['Transacted Value']
-
-        transactions = transactions.with_columns(pl.struct(['Type','Transacted Value']).map_elements(cash_flow).alias('Cash Flow'))
 
         self.__transactions_source = transactions
         
         print(f'Source : {self.__transactions_source.shape}')
-        #print(pd.io.sql.get_schema(self.__transactions_source.to_pandas(),'transactions'))
 
 
     def insert_delta(self):
@@ -147,6 +98,8 @@ class transaction_service():
                     )
 
                 print(f'Inserting {to_ingest.shape[0]} rows')
+
+
 
 print(f'##### Running Transaction Service #####')
 start = dt.now()
