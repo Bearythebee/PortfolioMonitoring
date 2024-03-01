@@ -20,9 +20,6 @@ class positions_service():
             query='SELECT * FROM "portfoliomonitoring"."public"."transactions"',
             connection = self.__transdbconn )
 
-        print(f'Transactions : {self.__transactions.shape}')
-
-
     def calculate_coi(self, method_='WEIGHTED_AVERAGE'):
 
         main = pl.DataFrame()
@@ -203,8 +200,6 @@ class positions_service():
 
         self.__transactions = transactions
 
-        print(self.__transactions.filter(pl.col('ticker')=='G13.SI'))
-
 
     def get_latest_prices(self):
         '''
@@ -228,7 +223,7 @@ class positions_service():
 
     def create_positions(self):
 
-        positions = self.__transactions#.filter(pl.col('ticker')=='G13.SI')
+        positions = self.__transactions
         
         # Run prices function
         self.get_latest_prices()
