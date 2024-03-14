@@ -11,10 +11,80 @@ import json
 from datetime import datetime
 import os
 import requests
+import multiprocessing
+from itertools import repeat
 
 current_date = datetime.now(pytz.timezone('Asia/Singapore')).strftime('%Y%m%d')
 logfilename = f"logfiles/eodhist/{current_date}.log"
 loggerobj  = Logger('eodhistdb',file=[logfilename])
+
+# Multiprocessing scraping
+def scrape_tasks(ticker):
+
+    output_logs = []
+
+    uri = os.getenv("MONGO_DB")
+    collection = MongoClient(uri, server_api=ServerApi('1')).prices["eod_prices"]
+
+    data = get_prices_full(ticker)
+    quotes = data['indicators']['quote'][0]
+    
+    metadata_columns = ['symbol','currency',
+    'instrumentType','exchangeName',
+    'firstTradeDate','gmtoffset',
+        'timezone', 'exchangeTimezoneName']
+
+    metadata =  {key: data['meta'][key] for key in metadata_columns}
+
+    if metadata['symbol'] == 'SGD=X':
+        metadata['symbol'] = 'USD/SGD'
+
+    if metadata['symbol'] == 'HKDSGD=X':
+        metadata['symbol'] = 'HKD/SGD'
+
+    symbol_ = metadata['symbol']
+    currency_ = metadata['currency']
+    exchange_ = metadata['exchangeName']
+    instr_type_ = metadata['instrumentType']
+
+    output_logs.append(f'Deleting all records of {ticker}')
+    output_logs.append(f"Current no.of.rows for {symbol_}: {len(list(collection.find({'metadata.symbol' : symbol_})))}")
+    collection.delete_many({'metadata.symbol' : symbol_})
+    output_logs.append(f"no.of.rows after deletion for {symbol_}: {len(list(collection.find({'metadata.symbol' : symbol_})))}")
+
+    fulldata = []
+
+    for i in range(len(data['timestamp'])):
+        time_ =  datetime.fromtimestamp(data['timestamp'][i]).replace(hour=0, minute=0, second=0)
+        open_ = quotes['open'][i]
+        high_ = quotes['high'][i]
+        low_ = quotes['low'][i]
+        close_ = quotes['close'][i]
+        volume_ = quotes['volume'][i]
+
+        row = {
+            "timestamp":time_,
+            "open":open_,
+            "high":high_,
+            "low":low_,
+            "close":close_,
+            "volume":volume_,
+            "metadata":metadata
+                }
+
+
+        fulldata.append(row)
+
+    # # print(sorted(fulldata,key=lambda x:x['timestamp']))
+    output_logs.append(f"Ingesting {ticker} with {len(fulldata)} items")
+    collection.insert_many(sorted(fulldata,key=lambda x:x['timestamp']))
+
+    output_logs.append(f"no.of.rows after ingestion for {ticker}: {len(list(collection.find({'metadata.symbol' : symbol_})))}")
+
+    rank = multiprocessing.current_process()._identity[0]
+    output_logs.append(f'Processor {rank}, got ticker={ticker}, and finished updating the database')
+
+    return output_logs
 
 class eod_hist_feed_service():
 
@@ -42,7 +112,7 @@ class eod_hist_feed_service():
 
 
     def get_distinct_tickers(self):
-        response = self.__cockroachdb.execute(text('SELECT distinct "Ticker" FROM "portfoliomonitoring"."public"."transactions"')).fetchall()
+        response = self.__cockroachdb.execute(text('SELECT distinct "ticker" FROM "portfoliomonitoring"."public"."transactions"')).fetchall()
 
         self.__uniquetickers = [x[0] for x in response]
 
@@ -132,7 +202,7 @@ class eod_hist_feed_service():
 
         self.__cockroachdb.execute(text('TRUNCATE table "portfoliomonitoring"."public"."securities"'))
         self.__cockroachdb.commit()
-
+        
         pl.DataFrame(metadata).write_database(
                 table_name="securities",
                 connection = os.environ["COCKROACH_DB"],
@@ -161,71 +231,30 @@ class eod_hist_feed_service():
             print(f"Starting Refresh of [{' '.join(counters)}]")
             to_refresh = counters
 
-        for ticker in to_refresh:
+        cpu_count = multiprocessing.cpu_count()
 
-            data = get_prices_full(ticker)
-            quotes = data['indicators']['quote'][0]
-            
-            metadata_columns = ['symbol','currency',
-            'instrumentType','exchangeName',
-            'firstTradeDate','gmtoffset',
-             'timezone', 'exchangeTimezoneName']
+        with multiprocessing.Pool(cpu_count) as pool:
+            # perform calculations
+            results = pool.map(scrape_tasks, to_refresh)
+            pool.close()
+            pool.join()
 
-            metadata =  {key: data['meta'][key] for key in metadata_columns}
-
-            if metadata['symbol'] == 'SGD=X':
-                metadata['symbol'] = 'USD/SGD'
-
-            if metadata['symbol'] == 'HKDSGD=X':
-                metadata['symbol'] = 'HKD/SGD'
-
-            symbol_ = metadata['symbol']
-            currency_ = metadata['currency']
-            exchange_ = metadata['exchangeName']
-            instr_type_ = metadata['instrumentType']
-
-            print(f'Deleting all records of {ticker}')
-            print(f"Current no.of.rows : {len(list(self.__collection.find({'metadata.symbol' : symbol_})))}")
-            self.__collection.delete_many({'metadata.symbol' : symbol_})
-            print(f"no.of.rows after deletion : {len(list(self.__collection.find({'metadata.symbol' : symbol_})))}")
-
-            fulldata = []
-
-            for i in range(len(data['timestamp'])):
-                time_ =  datetime.fromtimestamp(data['timestamp'][i]).replace(hour=0, minute=0, second=0)
-                open_ = quotes['open'][i]
-                high_ = quotes['high'][i]
-                low_ = quotes['low'][i]
-                close_ = quotes['close'][i]
-                volume_ = quotes['volume'][i]
-
-                row = {
-                    "timestamp":time_,
-                    "open":open_,
-                    "high":high_,
-                    "low":low_,
-                    "close":close_,
-                    "volume":volume_,
-                    "metadata":metadata
-                        }
-
-
-                fulldata.append(row)
-
-            # # print(sorted(fulldata,key=lambda x:x['timestamp']))
-            print(f"Ingesting {ticker} with {len(fulldata)} items")
-            self.__collection.insert_many(sorted(fulldata,key=lambda x:x['timestamp']))
-
-            print(f"no.of.rows after ingestion : {len(list(self.__collection.find({'metadata.symbol' : symbol_})))}")
+            for a in results:
+                for logs in a:
+                    print(logs)
 
 
     def ingest_prices_daily(self):
 
-        for ticker in self.__metadata.keys():
+        for ticker in sorted(self.__uniquetickers):
 
             print(f"Updating {ticker}")
 
             data = get_prices_daily(ticker)
+            
+            if data  == None:
+                continue
+            
             quotes = data['indicators']['quote'][0]
 
             metadata_columns = ['symbol','currency',
@@ -274,9 +303,9 @@ class eod_hist_feed_service():
 
             print(f"No.of.rows after update : {len(list(self.__collection.find({'metadata.symbol' : symbol_ ,'metadata.currency':currency_, 'metadata.exchangeName':exchange_,'metadata.instrumentType':instr_type_})))}")
 
-    
-feed_obj = eod_hist_feed_service(loggerobj)
-#feed_obj.test_connection()
-#feed_obj.refresh_metadata()
-#feed_obj.ingest_prices_daily()
-feed_obj.refresh_prices([])
+if __name__ == '__main__':   
+    feed_obj = eod_hist_feed_service(loggerobj)
+    #feed_obj.test_connection()
+    #feed_obj.refresh_metadata()
+    #feed_obj.ingest_prices_daily()
+    feed_obj.refresh_prices([])
