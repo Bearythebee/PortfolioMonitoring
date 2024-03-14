@@ -7,7 +7,7 @@ import pytz
 import json
 from datetime import datetime
 import os
-
+from collections import deque
 
 class positions_service():
 
@@ -33,9 +33,9 @@ class positions_service():
 
             if method == 'FIFO':
 
-                _trades = []
+                _trades = deque([])
 
-                output_series = []
+                output_series = deque([])
 
                 for i in range(df.shape[0]):
                     _type = df[i,'type']
@@ -73,8 +73,8 @@ class positions_service():
 
             elif method == 'LIFO':
 
-                _trades = []
-                output_series = []
+                _trades = deque([])
+                output_series = deque([])
 
                 for i in range(df.shape[0]):
                     _type = df[i,'type']
@@ -116,8 +116,8 @@ class positions_service():
 
             elif method == 'WEIGHTED_AVERAGE':
 
-                _trades = []
-                output_series = []
+                _trades = deque([])
+                output_series = deque([])
 
                 for i in range(df.shape[0]):
                     
