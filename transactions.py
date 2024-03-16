@@ -117,5 +117,5 @@ if __name__ == "__main__":
         work_pool_name="PortfolioMonitoring",
         tags=["transaction"],
         parameters={},
-        schedule=(CronSchedule(cron="0 0 * * *", timezone="Asia/Singapore"))
+        schedule=(CronSchedule(cron="10 3 * * *", timezone="Asia/Singapore"))
     )
