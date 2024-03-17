@@ -17,7 +17,6 @@ from prefect.blocks.system import JSON
 __conn_str = Secret.load("cockroachdb").get()
 __conn  = create_engine(__conn_str).connect()
 
-
 @task(name="test_connection_db")
 def test_connection_db():
     if __conn.execute(text("SELECT now()")).fetchall():
@@ -109,13 +108,20 @@ def transaction_service(name: str = "transaction_service"):
     insert_delta(__transactions_source,__transactions_target)
 
 if __name__ == "__main__":
-    transaction_service.from_source(
-        source='https://github.com/Bearythebee/PortfolioMonitoring.git',
-        entrypoint="transactions.py:transaction_service"
-    ).deploy(
+    transaction_service.serve(
         name="transaction_service",
-        work_pool_name="PortfolioMonitoring",
-        tags=["transaction"],
+        tags=["pm"],
         parameters={},
-        schedule=(CronSchedule(cron="10 3 * * *", timezone="Asia/Singapore"))
+        schedule=(CronSchedule(cron="00 00 * * *", timezone="Asia/Singapore"))
     )
+
+    #     transaction_service.from_source(
+    #     source='https://github.com/Bearythebee/PortfolioMonitoring.git',
+    #     entrypoint="transactions.py:transaction_service"
+    # ).deploy(
+    #     name="transaction_service",
+    #     work_pool_name="PortfolioMonitoring",
+    #     tags=["transaction"],
+    #     parameters={},
+    #     schedule=(CronSchedule(cron="07 11 * * *", timezone="Asia/Singapore"))
+    # )
